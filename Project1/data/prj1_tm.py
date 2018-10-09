@@ -6,10 +6,9 @@ import pickle
 import random
 import pprint as pp
 
-# command line args: speaker (bool)
+# command line args: -p port
 
 # Globals:
-myHostName = None
 myPort = None
 myProcId = None
 myIP = None
@@ -19,30 +18,36 @@ seq = 1
 myDataMessageQueue = []
 Delivered = []
 MessageCount = 5
+totalSpeakers = 0
 outgoingMessageQueue = []
 
 def setUp():
-    global myHostName
     global myNetworkData
     global myPort
     global myProcId
     global myIP
     global iAmASpeaker
+    global totalSpeakers
 
     if (len(sys.argv) > 1):
         #print(str(sys.argv))
-        if (sys.argv[1] == '1'):
-            iAmASpeaker = True
+        for i in range(len(sys.argv)):
+            if sys.argv[i] == "-p":
+                try:
+                    myPort = sys.argv[i +1]
+                except Exception as msg:
+                    print(msg)
+                    print("port not specified")
+                    return
+        
 
 
-
-    myHostName = socket.gethostname()
     with open('network.txt', mode='r') as csv_file:
         csv_reader = csv.DictReader(csv_file)
         temp = None
         for row in csv_reader:
             
-            temp = {'hostname': row['hostname'], 'port': row['port'], 'ip': row['ip'], 'processid': row['processid']}
+            temp = {'port': row['port'], 'ip': row['ip'], 'processid': row['processid'], 'speaker': row['speaker']}
             myNetworkData.append(temp)
 
 
@@ -50,24 +55,26 @@ def setUp():
     #print(str(myNetworkData))
 
     for i in myNetworkData:
-        if (i['hostname'] == str(myHostName)):
-            myPort = i['port']
+        if (i['port'] == str(myPort)):
             myProcId = i['processid']
             myIP = i['ip']
+            if (i['speaker'] == "1"):
+                iAmASpeaker = True
+        if (i['speaker'] == "1"):
+            totalSpeakers = totalSpeakers +1
 
+    if (myIP == None):
+        print("invalid port specified, check the network.txt file")
 
     return
 
 def printGlobals():
-    global myHostName
     global myNetworkData
     global myPort
     global myProcId
     global myIP
     global iAmASpeaker
 
-
-    print("MyHostName: " + str(myHostName))
     print("myPort: " + str(myPort))
     print("myProcId: " + str(myProcId))
     print("myIP: " + str(myIP))
@@ -106,7 +113,7 @@ def newMessageId():
     for i in myDataMessageQueue:
         temp = max(temp, i['msg_id'])
 
-    temp = temp + random.randint(1,10)
+    temp = temp + int(myProcId)
     return temp
 
 
@@ -212,7 +219,7 @@ def SpeakerBehavior():
     # check to see if we have messages we can deliver.
     for i in myDataMessageQueue:
         if i['deliverable'] == False:
-            print(i)
+            #print(i)
             if 'proposed_seqs' in i.keys() and len(i['proposed_seqs']) == len(myNetworkData):
                 i['deliverable'] = True
                 i['seq'] = getMaxSeq(i)
@@ -257,7 +264,8 @@ def processOutgoingMessage(outgoingQueue):
     port = messageData[2]
 
     temp = unpackMessage(message)
-    print("sending message: " + str(temp) + " to port " + str(port))
+    print("Sending message to IP: "+ str(ip) + " Port " + str(port) +":")
+    pp.pprint(temp)
 
     sendMessage(message,ip, port)
 
@@ -287,7 +295,8 @@ def listen(mysocket):
 
     if len(temp) > 0:
         temp = unpackMessage(temp)
-        print(temp)
+        print("Message Recieved:")
+        pp.pprint(temp)
 
         if temp['type'] == 1:        
             proscessDataMessage(temp)
@@ -303,6 +312,9 @@ def listen(mysocket):
 def main():
     setUp()
 
+    if myIP == None:
+        return
+
     if iAmASpeaker:
         print("I am a sender")
     else:
@@ -314,6 +326,8 @@ def main():
     global myDataMessageQueue
     global outgoingMessageQueue
     global Delivered
+
+    finalMessageCount = MessageCount * totalSpeakers
 
     mysocket = openListeningPort()
     mysocket.settimeout(5)
@@ -329,7 +343,7 @@ def main():
             if iAmASpeaker: 
                 SpeakerBehavior()
 
-        done = (len(Delivered) == 10 and (len(outgoingMessageQueue) == 0))
+        done = (len(Delivered) == finalMessageCount and (len(outgoingMessageQueue) == 0))
     
     closeSocket(mysocket)
     
