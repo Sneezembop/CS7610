@@ -469,6 +469,8 @@ func sendMessage(apeer peer, message interface{}) error {
 		return err
 	}
 
+
+
 	rw, err := Open(apeer.Ip + apeer.Port)
 	if err != nil {
 		return err
@@ -517,6 +519,7 @@ func main() {
 
 	id := flag.String("id", "", "the process id of this process so it can look itself up.")
 	verb := flag.String("v", "", "Set to anything to turn verbose logging on.")
+	config := flag.String("config", "", "config file with network data in it. Defaults to network.txt")
 	flag.Parse()
 
 	if *id != "" {
@@ -536,13 +539,21 @@ func main() {
 		verbose = true
 	}
 
-	readConfig()
+	if *config != ""{
+		readConfig(*config)
+	} else {
+		readConfig("network.txt")
+	}
+
+
 
 	for _, member := range masterList.Members {
 		if myself.Id == member.Id {
 			myself = member
 		}
 	}
+
+	fmt.Println("Starting process, my stats are: ", myself)
 
 	myview = view{
 		Leader:  masterList.Leader,
@@ -682,36 +693,36 @@ func Open(addr string) (*bufio.ReadWriter, error) {
 
 }
 
-func readConfig() {
+func readConfig(config string) {
 
-	csvFile, _ := os.Open("network.txt")
+	csvFile, _ := os.Open(config)
 	reader := csv.NewReader(bufio.NewReader(csvFile))
+	linecount := 1
 	for {
 		line, err := reader.Read()
 		if err == io.EOF {
 			break
 		} else if err != nil {
+			fmt.Println("Error Reading from file.")
 			log.Fatal(err)
 		}
 
-		id, err := strconv.Atoi(line[2])
-		if err != nil {
-			logString(err)
-		}
 
 		masterList.Members = append(masterList.Members, peer{
 			Ip:   line[0],
 			Port: line[1],
-			Id:   id,
+			Id:   linecount,
 		})
 
 		if line[3] == "1" {
 			masterList.Leader = &peer{
 				Ip:   line[0],
 				Port: line[1],
-				Id:   id,
+				Id:   linecount,
 			}
 		}
+
+		linecount++
 	}
 
 }
