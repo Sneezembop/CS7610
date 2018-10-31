@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,7 +20,7 @@ import (
 type peer struct {
 	Port string
 	Ip   string
-	Id   string
+	Id   int
 	// rw bufio.ReadWriter
 }
 
@@ -47,20 +48,20 @@ type operation struct {
 	ReqId  int
 	View   view
 	OKs    []peer
-	peerId string
+	peerId int
 }
 
 type reqMessage struct {
 	ReqId  int
 	ViewId int
 	Op     opType
-	PeerId string
+	PeerId int
 }
 
 type okMessage struct {
 	ReqId  int
 	ViewId int
-	PeerId string
+	PeerId int
 }
 
 type newViewMessage struct {
@@ -69,11 +70,11 @@ type newViewMessage struct {
 }
 
 type heartBeatMessage struct {
-	PeerId string
+	PeerId int
 }
 
 type newLeaderMessage struct {
-	PeerId string
+	PeerId int
 }
 
 var myself peer
@@ -91,7 +92,7 @@ var verbose = false
 var pendingOperations []operation
 
 const (
-	globalTimeout = time.Second * 4
+	globalTimeout    = time.Second * 4
 	allowedBadHearts = 2
 )
 
@@ -225,11 +226,11 @@ func handleOK(rw *bufio.ReadWriter) {
 			logString("New Op Update:")
 			logString(ops)
 
-			if len(ops.OKs) == (len(ops.View.Members) - 1) && ops.Op == ADD {
+			if len(ops.OKs) == (len(ops.View.Members)-1) && ops.Op == ADD {
 				pushAddOp(ops.peerId)
 			}
 
-			if len(ops.OKs) == (len(ops.View.Members) -2) && ops.Op == DEL {
+			if len(ops.OKs) == (len(ops.View.Members)-2) && ops.Op == DEL {
 				pushDelOp(ops.peerId)
 			}
 
@@ -239,7 +240,7 @@ func handleOK(rw *bufio.ReadWriter) {
 	return
 }
 
-func pushAddOp(peerId string) {
+func pushAddOp(peerId int) {
 
 	newPeer := getPeerById(peerId)
 
@@ -264,7 +265,7 @@ func pushAddOp(peerId string) {
 	return
 }
 
-func pushDelOp(peerId string) {
+func pushDelOp(peerId int) {
 
 	newView := view{
 		Viewid:  myview.Viewid + 1,
@@ -310,6 +311,25 @@ func handleNewView(rw *bufio.ReadWriter) {
 
 func handleNewLeader(rw *bufio.ReadWriter) {
 
+	logString("Receive New Leader data:")
+	var message newLeaderMessage
+	dec := gob.NewDecoder(rw)
+	err := dec.Decode(&message)
+	if err != nil {
+		logString("Error decoding GOB New Leader data:", err)
+		return
+	}
+
+
+	apeer := getPeerById(message.PeerId)
+
+	if apeer.Id != myself.Id{
+		myview.Leader = &apeer
+		myview.Viewid += 1
+
+		PrintView(myview)
+	}
+
 	return
 }
 
@@ -328,7 +348,7 @@ func handleHeartBeat(rw *bufio.ReadWriter) {
 	}
 
 	for i := 0; i < len(heartbeats); i++ {
-		if heartbeats[i].Id == string(newHeartbeat.PeerId) {
+		if heartbeats[i].Id == newHeartbeat.PeerId {
 			heartbeats = append(heartbeats[:i], heartbeats[i+1:]...)
 		}
 	}
@@ -336,7 +356,7 @@ func handleHeartBeat(rw *bufio.ReadWriter) {
 	return
 }
 
-func proposeViewChange(id string, op opType) {
+func proposeViewChange(id int, op opType) {
 
 	reqCount += 1
 
@@ -344,7 +364,7 @@ func proposeViewChange(id string, op opType) {
 		pushAddOp(id)
 	} else if len(myview.Members) == 2 && myview.Members[0].Id == myview.Leader.Id && op == DEL {
 		pushDelOp(id)
-		
+
 	} else {
 
 		newReqMessage := reqMessage{
@@ -381,7 +401,7 @@ func proposeViewChange(id string, op opType) {
 
 }
 
-func checkAndAddNewHeartbeat(id string) {
+func checkAndAddNewHeartbeat(id int) {
 
 	searchflag := false
 	for _, member := range masterList.Members {
@@ -404,6 +424,23 @@ func checkAndAddNewHeartbeat(id string) {
 	}
 
 	return
+}
+
+func sendNewLeaderMessage() {
+
+	message := newLeaderMessage{
+		PeerId: myself.Id,
+	}
+
+	for _, members := range myview.Members {
+		sendMessage(members, message)
+	}
+
+	myview.Leader = &myself
+	myview.Viewid += 1
+
+	PrintView(myview)
+
 }
 
 func sendMessage(apeer peer, message interface{}) error {
@@ -483,9 +520,16 @@ func main() {
 	flag.Parse()
 
 	if *id != "" {
-		myself.Id = *id
+
+		intId, err := strconv.Atoi(*id)
+		if err != nil {
+			logString(err)
+			return
+		}
+		myself.Id = intId
 	} else {
 		fmt.Println("You must specify a process Id using the --id flag.  Process quitting.")
+		return
 	}
 
 	if *verb != "" {
@@ -522,6 +566,32 @@ func main() {
 
 func heartBeat() error {
 
+	// initial heartbeats
+	for {
+
+		timer := time.NewTimer(time.Second)
+
+		<-timer.C
+
+		for _, apeer := range masterList.Members {
+
+			err := sendMessage(apeer, heartBeatMessage{myself.Id})
+			if err != nil {
+				logString("Initial Heartbeat Error, Probably fine. ", err)
+
+			}
+		}
+
+		if len(myview.Members) >= 2{
+			break
+		}
+
+	}
+
+
+
+	// Actual heartbeat loop
+
 	for {
 		timer := time.NewTimer(time.Second)
 
@@ -549,21 +619,49 @@ func heartBeat() error {
 
 func checkForBadHearts() {
 
-	for _, apeer := range myview.Members{
+	for _, apeer := range myview.Members {
 
 		count := 0
-		for _, heart := range heartbeats{
-			if heart.Id == apeer.Id{
+		for _, heart := range heartbeats {
+			if heart.Id == apeer.Id {
 				count += 1
 			}
 		}
 		if count > allowedBadHearts {
 			fmt.Println("Trouble detecting heartbeat from process ", apeer.Id)
-			if myself.Id == myview.Leader.Id{
+			if myself.Id == myview.Leader.Id {
 				proposeViewChange(apeer.Id, DEL)
 			}
 
+			if apeer.Id == myview.Leader.Id {
 
+				fmt.Println("dead process is the leader, determining new leader")
+				lowestProcId := 0
+				for _, members := range myview.Members {
+					if members.Id != myview.Leader.Id {
+						if lowestProcId == 0 {
+							lowestProcId = members.Id
+						} else if lowestProcId >= members.Id{
+							lowestProcId = members.Id
+						}
+					}
+
+
+
+				}
+
+				if lowestProcId == myself.Id {
+					fmt.Println("I am the new leader")
+					sendNewLeaderMessage()
+				}
+
+			}
+
+			for i := 0; i < len(heartbeats); i++ {
+				if heartbeats[i].Id == apeer.Id {
+					heartbeats = append(heartbeats[:i], heartbeats[i+1:]...)
+				}
+			}
 
 		}
 	}
@@ -596,17 +694,22 @@ func readConfig() {
 			log.Fatal(err)
 		}
 
+		id, err := strconv.Atoi(line[2])
+		if err != nil {
+			logString(err)
+		}
+
 		masterList.Members = append(masterList.Members, peer{
 			Ip:   line[0],
 			Port: line[1],
-			Id:   line[2],
+			Id:   id,
 		})
 
 		if line[3] == "1" {
 			masterList.Leader = &peer{
 				Ip:   line[0],
 				Port: line[1],
-				Id:   line[2],
+				Id:   id,
 			}
 		}
 	}
@@ -615,14 +718,17 @@ func readConfig() {
 
 func PrintView(aview view) {
 
+	fmt.Println("===============================================================================")
+
 	fmt.Println("View:")
-	fmt.Println(aview)
+	fmt.Println(aview , "\n")
 	fmt.Println("Leader:")
 	fmt.Println(aview.Leader)
+	fmt.Println("===============================================================================")
 	return
 }
 
-func getPeerById(peerid string) peer {
+func getPeerById(peerid int) peer {
 
 	for _, apeer := range masterList.Members {
 		if apeer.Id == peerid {
@@ -630,7 +736,7 @@ func getPeerById(peerid string) peer {
 		}
 	}
 
-	return peer{"", "", ""}
+	return peer{"", "", 0}
 }
 
 func logString(str ...interface{}) {
