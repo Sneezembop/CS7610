@@ -714,7 +714,7 @@ func readConfig(config string) {
 			Id:   linecount,
 		})
 
-		if line[3] == "1" {
+		if linecount == 1 {
 			masterList.Leader = &peer{
 				Ip:   line[0],
 				Port: line[1],
